@@ -1,0 +1,148 @@
+openapi: 3.0.0
+info:
+  title: Система архивирования
+  version: 1.0.0
+
+paths:
+  /tasks:
+    post:
+      operationId: createTask
+      summary: Поставить задание на архивирование в очередь
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Task'
+      responses:
+        '200':
+          description: Ответ интеграции Message Queue преобразуется в 202
+          x-yc-status-mapping: 202
+        '202':
+          description: Задание принято
+        '400':
+          description: Некорректное задание
+      x-yc-apigateway-validator:
+        validateRequestBody: true
+        validationErrorHandler:
+          statusCode: 400
+          x-yc-apigateway-integration:
+            type: dummy
+            http_code: 200
+            http_headers:
+              Content-Type: application/json
+            content:
+              '*': '{"message":"Invalid archive task"}'
+      x-yc-apigateway-integration:
+        type: cloud_ymq
+        action: SendMessage
+        queue_url: '${queue_url}'
+        folder_id: '${folder_id}'
+        service_account_id: '${service_account_id}'
+
+  /archives:
+    get:
+      operationId: listArchives
+      summary: Получить список архивов
+      responses:
+        '200':
+          description: Список архивов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Archive'
+      x-yc-apigateway-integration:
+        type: cloud_ydb
+        action: Scan
+        database: '${database}'
+        table_name: '${table_name}'
+        service_account_id: '${service_account_id}'
+
+  /archives/{key}:
+    get:
+      operationId: getArchive
+      summary: Получить информацию об архиве
+      parameters:
+        - $ref: '#/components/parameters/ArchiveKey'
+      responses:
+        '200':
+          description: Информация об архиве
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Archive'
+        '404':
+          description: Архив не найден
+      x-yc-apigateway-integration:
+        type: cloud_ydb
+        action: GetItem
+        database: '${database}'
+        table_name: '${table_name}'
+        key: '{"key":"{key}"}'
+        service_account_id: '${service_account_id}'
+
+  /download/{key}:
+    get:
+      operationId: downloadArchive
+      summary: Скачать ZIP-архив
+      parameters:
+        - $ref: '#/components/parameters/ArchiveKey'
+      responses:
+        '200':
+          description: ZIP-архив
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Архив не найден
+      x-yc-apigateway-integration:
+        type: object_storage
+        bucket: '${bucket_name}'
+        object: '{key}'
+        service_account_id: '${service_account_id}'
+
+components:
+  parameters:
+    ArchiveKey:
+      name: key
+      in: path
+      required: true
+      description: UUIDv7 с суффиксом .zip
+      schema:
+        type: string
+        example: 019a0000-0000-7000-8000-000000000001.zip
+  schemas:
+    Task:
+      type: object
+      required: [name, url]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          not:
+            enum: ['.', '..']
+          pattern: '^[^/\\\x00-\x1F\x7F]+$'
+          example: document.pdf
+        url:
+          type: string
+          format: uri
+          maxLength: 4096
+          pattern: '^https?://[^/?#@\s]+([/?#][^\s]*)?$'
+          example: https://example.com/document.pdf
+    Archive:
+      type: object
+      required: [name, url, key]
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        key:
+          type: string
